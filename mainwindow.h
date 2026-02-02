@@ -10,11 +10,10 @@
 #include <QVector>
 #include <QColor>
 #include <QTimer>
-#include "axistag.h"  // Добавлен заголовочный файл для AxisTag
+#include "axistag.h"
 
 class QCustomPlot;
 class QCPGraph;
-class QCPLayoutGrid;
 
 class MainWindow : public QMainWindow
 {
@@ -37,6 +36,13 @@ private:
     double calculateTotalCpuUsage(const QVector<double> &cpuUsages);
     double roundToTen(double value);
 
+    static constexpr qint64 MAX_UDP_DATAGRAM_SIZE = 4096;
+    static constexpr int MAX_HISTORY_POINTS = 300;
+    static constexpr int X_VISIBLE_MINUTES = 5;
+    static constexpr int Y_AXIS_PADDING_FOR_TAG = 30;
+    static constexpr double Y_AXIS_MARGIN_FACTOR = 1.1;
+    static constexpr double MIN_Y_AXIS_RANGE = 10.0;
+
     QUdpSocket *udpSocket;
     QTimer *updateTimer;
 
@@ -45,40 +51,18 @@ private:
     QTableWidget *coresTable;
 
     QCustomPlot *customPlot;
-    QCPLayoutGrid *mainLayout;
-
     QVector<QCPGraph*> cpuGraphs;
     QCPGraph *totalGraph;
-    AxisTag *cpuTag;  // Индикатор для общей CPU загрузки
+    AxisTag *totalCpuIndicator;
 
     QVector<QVector<double>> cpuHistory;
     QVector<double> totalCpuHistory;
     QVector<double> timeHistory;
 
-    static const int MAX_HISTORY_POINTS = 300;
     double currentTimeSec;
 
-    static const int X_VISIBLE_MINUTES = 5;
-    static const int X_TICK_STEP_SECONDS = 60;
-
-    QVector<QColor> coreColors = {
-        QColor(255, 0, 0),
-        QColor(0, 180, 60),
-        QColor(0, 0, 255),
-        QColor(255, 165, 0),
-        QColor(128, 0, 128),
-        QColor(0, 255, 255),
-        QColor(255, 0, 255),
-        QColor(139, 69, 19),
-        QColor(255, 192, 203),
-        QColor(128, 128, 128),
-        QColor(0, 128, 128),
-        QColor(128, 0, 0),
-        QColor(75, 0, 130),
-        QColor(255, 215, 0),
-        QColor(64, 224, 208),
-        QColor(255, 105, 180)
-    };
+    // Выносим цвета по умолчанию в приватный метод
+    QVector<QColor> getDefaultCoreColors() const;
 };
 
 #endif // MAINWINDOW_H

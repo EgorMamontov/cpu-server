@@ -5,6 +5,11 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QDateTime>
+#include <QLoggingCategory>
+#include <numeric>
+
+// Категория логирования для отладки
+Q_LOGGING_CATEGORY(cpuMonitor, "app.cpumonitor")
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -14,9 +19,8 @@ MainWindow::MainWindow(QWidget *parent)
     , totalLabel(new QLabel("Total: —"))
     , coresTable(new QTableWidget(0, 2, this))
     , customPlot(new QCustomPlot(this))
-    , mainLayout(nullptr)
     , totalGraph(nullptr)
-    , cpuTag(nullptr)  // Инициализация индикатора
+    , totalCpuIndicator(nullptr)
     , currentTimeSec(QDateTime::currentSecsSinceEpoch())
 {
     setupUI();
@@ -25,9 +29,10 @@ MainWindow::MainWindow(QWidget *parent)
     connect(updateTimer, &QTimer::timeout, this, &MainWindow::updateXAxisRange);
     updateTimer->start(1000);
 
-    // Открываем сокет
+    // Открываем сокет с проверкой ошибок
     if (!udpSocket->bind(QHostAddress::LocalHost, 1234)) {
         totalLabel->setText(QString("Bind error: %1").arg(udpSocket->errorString()));
+        qCCritical(cpuMonitor) << "Failed to bind UDP socket:" << udpSocket->errorString();
         return;
     }
     connect(udpSocket, &QUdpSocket::readyRead, this, &MainWindow::onReadyRead);
@@ -36,22 +41,64 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow()
 {
     // Удаляем индикатор, если он был создан
-    if (cpuTag) {
-        delete cpuTag;
-    }
+    delete totalCpuIndicator;
 }
 
 double MainWindow::calculateTotalCpuUsage(const QVector<double> &cpuUsages)
 {
     if (cpuUsages.isEmpty()) return 0.0;
-    double sum = 0.0;
-    for (double usage : cpuUsages) sum += usage;
+
+    // Используем STL алгоритм для лучшей читабельности
+    double sum = std::accumulate(cpuUsages.begin(), cpuUsages.end(), 0.0);
     return sum / cpuUsages.size();
 }
 
 double MainWindow::roundToTen(double value)
 {
+    // проверяем отрицательные значения
+    if (value < 0.0) {
+        qCWarning(cpuMonitor) << "Negative value passed to roundToTen:" << value;
+        return 0.0;
+    }
+
+    // Округление до ближайшего большего десятка
     return ceil(value / 10.0) * 10.0;
+}
+
+QVector<QColor> MainWindow::getDefaultCoreColors() const
+{
+    // Выносим цвета в отдельный метод для лучшей организации
+    return QVector<QColor>{
+        QColor(255, 0, 0),     // Красный
+        QColor(0, 180, 60),    // Зеленый
+        QColor(0, 0, 255),     // Синий
+        QColor(255, 165, 0),   // Оранжевый
+        QColor(128, 0, 128),   // Фиолетовый
+        QColor(0, 255, 255),   // Голубой
+        QColor(255, 0, 255),   // Розовый
+        QColor(139, 69, 19),   // Коричневый
+        QColor(255, 192, 203), // Светло-розовый
+        QColor(128, 128, 128), // Серый
+        QColor(0, 128, 128),   // Бирюзовый
+        QColor(128, 0, 0),     // Темно-красный
+        QColor(75, 0, 130),    // Индиго
+        QColor(255, 215, 0),   // Золотой
+        QColor(64, 224, 208),  // Бирюзовый2
+        QColor(255, 105, 180)  // Розовый2
+    };
+}
+
+QColor MainWindow::getColorForCore(int coreIndex)
+{
+    QVector<QColor> defaultColors = getDefaultCoreColors();
+
+    if (coreIndex < defaultColors.size()) {
+        return defaultColors[coreIndex];
+    }
+
+    // Если ядер больше, чем предопределенных цветов, генерируем новый цвет
+    int hue = (coreIndex * 41) % 360; // 41 - простое число для лучшего распределения
+    return QColor::fromHsv(hue, 200, 255);
 }
 
 void MainWindow::setupUI()
@@ -91,8 +138,8 @@ void MainWindow::setupUI()
     connect(customPlot->yAxis, SIGNAL(rangeChanged(QCPRange)),
             customPlot->yAxis2, SLOT(setRange(QCPRange)));
 
-    // Добавляем отступ для индикатора
-    customPlot->yAxis2->setPadding(30);
+    // Добавляем отступ для индикатора (используем именованную константу)
+    customPlot->yAxis2->setPadding(Y_AXIS_PADDING_FOR_TAG);
 
     // Настройка оси X для отображения времени
     QSharedPointer<QCPAxisTickerDateTime> dateTimeTicker(new QCPAxisTickerDateTime);
@@ -117,9 +164,9 @@ void MainWindow::setupUI()
     totalGraph->setVisible(true);
 
     // === СОЗДАЕМ ИНДИКАТОР ДЛЯ ПРАВОЙ ОСИ ===
-    cpuTag = new AxisTag(customPlot->yAxis2);
-    cpuTag->setPen(QPen(QColor(0, 0, 0), 2));
-    cpuTag->setBrush(QBrush(Qt::white));
+    totalCpuIndicator = new AxisTag(customPlot->yAxis2);
+    totalCpuIndicator->setPen(QPen(QColor(0, 0, 0), 2));
+    totalCpuIndicator->setBrush(QBrush(Qt::white));
 
     // Стиль оформления
     customPlot->setBackground(QColor(240, 240, 240));
@@ -137,13 +184,6 @@ void MainWindow::setupUI()
     resize(900, 600);
 }
 
-QColor MainWindow::getColorForCore(int coreIndex)
-{
-    if (coreIndex < coreColors.size()) return coreColors[coreIndex];
-    int hue = (coreIndex * 41) % 360;
-    return QColor::fromHsv(hue, 200, 255);
-}
-
 void MainWindow::updateXAxisRange()
 {
     currentTimeSec = QDateTime::currentSecsSinceEpoch();
@@ -152,14 +192,17 @@ void MainWindow::updateXAxisRange()
     if (!timeHistory.isEmpty()) {
         // Обновляем ключи для существующих данных
         for (int i = 0; i < cpuGraphs.size(); ++i) {
-            if (i < cpuHistory.size() && !cpuHistory[i].isEmpty()) {
-                QVector<double> keys;
-                int startIdx = qMax(0, timeHistory.size() - cpuHistory[i].size());
-                for (int j = startIdx; j < timeHistory.size(); ++j) {
-                    keys.append(timeHistory[j]);
-                }
-                cpuGraphs[i]->setData(keys, cpuHistory[i]);
+            // проверяем границы
+            if (i >= cpuHistory.size() || cpuHistory[i].isEmpty()) {
+                continue;
             }
+
+            QVector<double> keys;
+            int startIdx = qMax(0, timeHistory.size() - cpuHistory[i].size());
+            for (int j = startIdx; j < timeHistory.size(); ++j) {
+                keys.append(timeHistory[j]);
+            }
+            cpuGraphs[i]->setData(keys, cpuHistory[i]);
         }
 
         // Обновляем график общей нагрузки
@@ -173,8 +216,8 @@ void MainWindow::updateXAxisRange()
 
             // === ОБНОВЛЯЕМ ИНДИКАТОР ===
             double lastValue = totalCpuHistory.last();
-            cpuTag->updatePosition(lastValue);
-            cpuTag->setText(QString::number(lastValue, 'f', 1) + " %");
+            totalCpuIndicator->updatePosition(lastValue);
+            totalCpuIndicator->setText(QString::number(lastValue, 'f', 1) + " %");
         }
 
         updateYAxisRange();
@@ -190,8 +233,10 @@ void MainWindow::updateYAxisRange()
     // Проверяем данные ядер
     for (int i = 0; i < cpuHistory.size(); ++i) {
         for (int j = 0; j < cpuHistory[i].size(); ++j) {
-            if (timeHistory.size() - cpuHistory[i].size() + j >= 0) {
-                double dataTime = timeHistory[timeHistory.size() - cpuHistory[i].size() + j];
+            int timeIndex = timeHistory.size() - cpuHistory[i].size() + j;
+            // Безопасность: проверяем корректность индекса
+            if (timeIndex >= 0 && timeIndex < timeHistory.size()) {
+                double dataTime = timeHistory[timeIndex];
                 if (dataTime >= minVisibleTime) {
                     yMax = qMax(yMax, cpuHistory[i][j]);
                 }
@@ -201,8 +246,9 @@ void MainWindow::updateYAxisRange()
 
     // Проверяем общую нагрузку
     for (int j = 0; j < totalCpuHistory.size(); ++j) {
-        if (timeHistory.size() - totalCpuHistory.size() + j >= 0) {
-            double dataTime = timeHistory[timeHistory.size() - totalCpuHistory.size() + j];
+        int timeIndex = timeHistory.size() - totalCpuHistory.size() + j;
+        if (timeIndex >= 0 && timeIndex < timeHistory.size()) {
+            double dataTime = timeHistory[timeIndex];
             if (dataTime >= minVisibleTime) {
                 yMax = qMax(yMax, totalCpuHistory[j]);
             }
@@ -211,11 +257,19 @@ void MainWindow::updateYAxisRange()
 
     if (yMax < 1e-6) yMax = 0.0;
 
-    double yMaxWithMargin = roundToTen(yMax * 1.1);
-    if (yMaxWithMargin < 10) yMaxWithMargin = 10;
+    // Расчет максимального значения оси Y с запасом 10% и округлением до десятков
+    // 1. Увеличиваем максимальное значение на 10% для лучшей визуализации
+    // 2. Округляем до ближайшего большего десятка
+    // 3. Гарантируем минимальный диапазон для отображения
+    double yMaxWithMargin = roundToTen(yMax * Y_AXIS_MARGIN_FACTOR);
+    if (yMaxWithMargin < MIN_Y_AXIS_RANGE) {
+        yMaxWithMargin = MIN_Y_AXIS_RANGE;
+    }
 
     customPlot->yAxis->setRange(0, yMaxWithMargin);
 
+    // Расчет шага делений оси Y (5% от диапазона)
+    // Это обеспечивает примерно 20 делений на оси, что удобно для восприятия
     double tickStep = yMaxWithMargin * 0.05;
     if (tickStep < 1) tickStep = 1;
 
@@ -228,9 +282,23 @@ void MainWindow::updateYAxisRange()
 void MainWindow::onReadyRead()
 {
     while (udpSocket->hasPendingDatagrams()) {
+        // проверяем размер датаграммы
+        qint64 pendingSize = udpSocket->pendingDatagramSize();
+        if (pendingSize <= 0 || pendingSize > MAX_UDP_DATAGRAM_SIZE) {
+            qCWarning(cpuMonitor) << "Invalid datagram size:" << pendingSize;
+            udpSocket->readDatagram(nullptr, 0); // Сбрасываем пакет
+            continue;
+        }
+
         QByteArray datagram;
-        datagram.resize(static_cast<int>(udpSocket->pendingDatagramSize()));
-        udpSocket->readDatagram(datagram.data(), datagram.size());
+        datagram.resize(static_cast<int>(pendingSize));
+
+        qint64 bytesRead = udpSocket->readDatagram(datagram.data(), datagram.size());
+        if (bytesRead != pendingSize) {
+            qCWarning(cpuMonitor) << "Incomplete datagram read:" << bytesRead << "of" << pendingSize;
+            continue;
+        }
+
         parseAndDisplay(datagram);
     }
 }
@@ -240,12 +308,19 @@ void MainWindow::parseAndDisplay(const QByteArray &data)
     QString text = QString::fromUtf8(data).trimmed();
     QStringList lines = text.split('\n', Qt::SkipEmptyParts);
 
-    if (!lines.isEmpty() && lines[0].startsWith("Total:")) {
-        totalLabel->setText(lines[0].trimmed());
+    // базовая проверка формата данных
+    if (lines.isEmpty() || !lines[0].startsWith("Total:")) {
+        qCWarning(cpuMonitor) << "Invalid data format received";
+        return;
     }
 
+    totalLabel->setText(lines[0].trimmed());
+
     int coreCount = lines.size() - 1;
-    if (coreCount <= 0) return;
+    if (coreCount <= 0) {
+        qCDebug(cpuMonitor) << "No core data received";
+        return;
+    }
 
     // Инициализация при первом получении данных
     if (coresTable->rowCount() == 0) {
@@ -284,14 +359,29 @@ void MainWindow::parseAndDisplay(const QByteArray &data)
         QRegularExpressionMatch match = re.match(line);
         if (match.hasMatch()) {
             int coreIdx = match.captured(1).toInt();
+
+            // проверяем индекс ядра
+            if (coreIdx < 0 || coreIdx >= coreCount) {
+                qCWarning(cpuMonitor) << "Invalid core index:" << coreIdx;
+                continue;
+            }
+
             qreal usage = match.captured(2).toDouble();
             currentUsages[coreIdx] = usage;
 
-            if (QProgressBar *bar = qobject_cast<QProgressBar*>(coresTable->cellWidget(coreIdx, 1))) {
+            QWidget *widget = coresTable->cellWidget(coreIdx, 1);
+            if (!widget) {
+                qCWarning(cpuMonitor) << "No progress bar widget for core" << coreIdx;
+                continue;
+            }
+
+            if (QProgressBar *bar = qobject_cast<QProgressBar*>(widget)) {
                 bar->setValue(static_cast<int>(usage));
                 QString color = usage > 80 ? "#ff4444" : (usage > 50 ? "#ffaa00" : "#44ff44");
                 bar->setStyleSheet(QString("QProgressBar::chunk { background-color: %1; }").arg(color));
             }
+        } else {
+            qCDebug(cpuMonitor) << "Failed to parse line:" << line;
         }
     }
 
@@ -301,7 +391,10 @@ void MainWindow::parseAndDisplay(const QByteArray &data)
 void MainWindow::updatePlots(const QVector<double> &cpuUsages)
 {
     int coreCount = cpuUsages.size();
-    if (coreCount == 0 || cpuGraphs.size() != coreCount) return;
+    if (coreCount == 0 || cpuGraphs.size() != coreCount) {
+        qCWarning(cpuMonitor) << "Core count mismatch:" << coreCount << "vs" << cpuGraphs.size();
+        return;
+    }
 
     double totalUsage = calculateTotalCpuUsage(cpuUsages);
     currentTimeSec = QDateTime::currentSecsSinceEpoch();
@@ -341,8 +434,8 @@ void MainWindow::updatePlots(const QVector<double> &cpuUsages)
     totalGraph->setData(totalKeys, totalCpuHistory);
 
     // === ОБНОВЛЯЕМ ИНДИКАТОР ===
-    cpuTag->updatePosition(totalUsage);
-    cpuTag->setText(QString::number(totalUsage, 'f', 1) + " %");
+    totalCpuIndicator->updatePosition(totalUsage);
+    totalCpuIndicator->setText(QString::number(totalUsage, 'f', 1) + " %");
 
     // Обновляем диапазон оси X
     customPlot->xAxis->setRange(currentTimeSec - X_VISIBLE_MINUTES * 60, currentTimeSec);

@@ -9,6 +9,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Добавляем PrintSupport в компоненты Qt
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Network PrintSupport)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Network PrintSupport)
 
@@ -20,7 +21,6 @@ set(QCUSTOMPLOT_SOURCES
 set(PROJECT_SOURCES
     main.cpp
     mainwindow.h mainwindow.cpp
-    axistag.h axistag.cpp
     ${QCUSTOMPLOT_SOURCES}
 )
 
@@ -28,6 +28,7 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
     qt_add_executable(cpu-server
         MANUAL_FINALIZATION
         ${PROJECT_SOURCES}
+        axistag.h axistag.cpp
     )
 else()
     if(ANDROID)
@@ -37,8 +38,10 @@ else()
     endif()
 endif()
 
+# Добавляем подкаталог в пути поиска заголовков
 target_include_directories(cpu-server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/qcustomplot)
 
+# Добавляем PrintSupport в линковку
 target_link_libraries(cpu-server PRIVATE
     Qt${QT_VERSION_MAJOR}::Widgets
     Qt${QT_VERSION_MAJOR}::Network
