@@ -49,3 +49,5 @@ Core <N+1>: <float>%
 ...
 Core <M>: <float>%
 ```
+![](./assets/Screenshot_20260131_231227.png)
+![](./assets/Screenshot_20260131_231117.png)
